@@ -1,74 +1,86 @@
 # cargo-seed
 
-Every new git worktree of a Rust project normally builds the whole dependency
-graph from nothing and keeps a full `target/` of its own. With several agents
-or people each working in their own worktree, that is most of the machine's
-CPU and disk.
+Each new git worktree of a Rust project builds all crates from nothing and
+keeps its own full `target/`. cargo-seed gives a new worktree a copy of a
+warm target instead, and removes build output that no build uses.
 
-`cargo seed` keeps one *seed*: a locked worktree at the remote's default
-branch whose `target/` holds what you build. A new worktree gets a
-copy-on-write clone of that target (one `clonefile` call on APFS, reflinks on
-btrfs and XFS, block cloning on ReFS, a plain copy elsewhere), and the clone
-is corrected so cargo rebuilds exactly what differs from the seed:
+## Seeds
 
-- A file or directory whose committed content equals the seed's, and which
-  neither tree has edited, gets the seed's mtime. Every other path keeps the
-  time git wrote it with, so its units rebuild.
-- Cargo's fingerprint records that list a seed file by absolute path are
-  pointed at the new tree, with their own mtimes kept.
-- A build script that watches a seed source by absolute path reruns.
-- A unit whose code holds a seed path rebuilds. rustc reports every variable a
-  crate read with `env!`, and cargo leaves the ones it sets itself, such as
-  `CARGO_MANIFEST_DIR`, out of its fingerprint
+A seed is a locked worktree at the remote's default branch, built with the
+commands you run. `git worktree add` copies the seed's `target/` into the new
+worktree. On APFS, btrfs, XFS and ReFS the copy shares disk blocks with the
+seed; elsewhere it is a plain copy.
+
+Cargo then rebuilds only what differs from the seed:
+
+- A file equal to the seed's committed file gets the seed's mtime. Other
+  files keep the time git wrote them with, so their crates rebuild.
+- Records that list a seed file by absolute path move to the new worktree.
+- A build script that watches a seed file by absolute path runs again.
+- A crate that reads `CARGO_MANIFEST_DIR` with `env!` rebuilds: its code holds
+  the path, and cargo does not track that variable
   ([cargo#8693](https://github.com/rust-lang/cargo/issues/8693)).
-
-## Use
 
 ```sh
 cargo install cargo-seed
-cd my-repo
 git config --add seed.warm "cargo build --workspace --all-targets"
 git config --add seed.warm "cargo clippy --workspace --all-targets"
-cargo seed refresh        # makes the first seed and warms it
-cargo seed install-hook   # `git worktree add` now seeds every new worktree
+cargo seed refresh        # make the first seed
+cargo seed install-hook   # seed every new worktree
 ```
 
-The hook also starts a background `cargo seed refresh` when the followed
-branch has moved past the seed. A refresh clones the current seed into a new
-one at the new commit, warms it, and removes the old seed once no clone reads
-it.
+When the remote branch moves past the seed, the hook starts
+`cargo seed refresh` in the background. A refresh copies the current seed to
+a new one at the new commit, builds it, removes unused output from it, and
+then removes the old seed.
 
-| git config | meaning |
+| git config | |
 |---|---|
-| `seed.warm` | a command run in a new seed; repeat the key for more (default `cargo build --workspace --all-targets`) |
-| `seed.ref` | the commit seeds follow (default `origin/HEAD`) |
-| `seed.autoRefresh` | `false` stops the hook from refreshing a seed that fell behind |
-| `seed.path` | the current seed, written by `refresh` |
+| `seed.warm` | a command a seed is built with; repeatable. Default `cargo build --workspace --all-targets` |
+| `seed.ref` | the commit seeds follow. Default `origin/HEAD` |
+| `seed.autoRefresh` | `false`: the hook does not refresh |
+| `seed.path` | the current seed; `refresh` writes it |
 
-`install-hook` writes only the repository's own `.git/hooks/post-checkout`.
-When `core.hooksPath` is set, it prints the line to add there.
+`install-hook` writes only `.git/hooks/post-checkout`. If `core.hooksPath` is
+set, it prints the line to add there.
 
-## Disk
+## Unused build output
 
-Most of a busy worktree's target is rustc's incremental state, one directory
-per crate, feature set, profile and test target, and most of it belongs to
-builds the worktree stopped repeating. `cargo seed prune --apply` removes the
-incremental directories no build touched for an hour (`--idle-minutes N`) in
-the targets of the repository's worktrees. Seeds keep theirs, and so does a
-target with a build in flight. rustc rebuilds such a crate without reuse the
-next time it changes. On one machine this found 36.7 GB in 1542 crate
-directories without removing a single target.
+`cargo seed prune --root ~/projects --apply` removes from every cargo target
+under the folder:
+
+- incremental state that no build touched for an hour (`--idle-minutes`)
+- builds that a newer build of the same unit replaced: after a dependency
+  update or a new compiler, cargo builds the unit again under a new hash and
+  keeps the old one
+
+It skips seeds and targets built in the last 15 minutes. A removed build
+costs a rebuild if it is needed again. Without `--apply` it only reports.
+
+## Parallel front end
+
+`rustc-threads` runs rustc's parallel front end on the stable compiler for
+workspace crates in unoptimized builds. Release builds and dependencies run
+unchanged. `RUSTC_BOOTSTRAP` is set for the one crate being compiled.
+
+```toml
+# ~/.cargo/config.toml
+[build]
+rustc-wrapper = "/path/to/.cargo/bin/rustc-threads"
+```
 
 ## Measured
 
-On a 41-crate, 698-package workspace (Cranpose):
+On a 41-crate workspace with 698 packages:
 
 | | seeded | cold |
 |---|---|---|
-| workspace clippy, loaded M-series Mac | 6.8 s | 13 min 49 s |
-| app and test build, Linux, same commit as the seed | 40 s | 123 s |
-| same build, tree 6 merges behind the seed | 50 s | 174 s |
+| workspace clippy, loaded Mac | 6.8 s | 13 min 49 s |
+| app and tests build, Linux | 40 s | 123 s |
 
-The seeded and cold binaries were byte-identical with debug sections and the
-build id removed. A seeded worktree shares the seed's disk blocks until it
-rebuilds something.
+- Seeded and cold binaries were byte-identical without debug sections.
+- `rustc-threads`: one large crate's check took 2.1 s instead of 3.5 s, and
+  its build 3.2 s instead of 5.9 s; the final binary was identical.
+- `prune` removed 12.3 GB from one 42 GB target.
+
+Tested on macOS and Linux. Windows builds, but is not tested.

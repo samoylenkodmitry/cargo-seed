@@ -3,8 +3,10 @@ name = "cargo-seed"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Start every new git worktree with a warm cargo target: a copy-on-write clone of a seed worktree's target, made correct for the new tree"
+description = "New git worktrees start with a warm cargo target copied from a seed; unused build output is removed"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/samoylenkodmitry/cargo-seed"
+readme = "README.md"
 keywords = ["cargo", "worktree", "build", "cache", "subcommand"]
 categories = ["development-tools::cargo-plugins"]
 
