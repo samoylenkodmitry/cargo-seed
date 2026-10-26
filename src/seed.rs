@@ -21,7 +21,7 @@ const AUTO_REFRESH_KEY: &str = "seed.autoRefresh";
 pub(crate) const LOCK_REASON: &str = "cargo seed";
 /// Git config key of the free space a refresh needs before it starts.
 const MIN_FREE_KEY: &str = "seed.minFreeGb";
-const DEFAULT_MIN_FREE_GB: u64 = 40;
+const DEFAULT_MIN_FREE_GB: u64 = 10;
 /// How often new worktrees start a prune of the repository's worktrees.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// The tag cargo writes into a target it creates (https://bford.info/cachedir/).
@@ -45,6 +45,13 @@ fn lock_file(repo: &Checkout, seed: &Path) -> io::Result<File> {
         .truncate(false)
         .write(true)
         .open(state_dir(repo)?.join(format!("{name}.lock")))
+}
+
+/// The repository's main checkout: the parent of the shared git directory,
+/// in the path form the platform's records use.
+fn primary_checkout(repo: &Checkout) -> io::Result<PathBuf> {
+    let common = real_path(&repo.common_dir()?)?;
+    Ok(common.parent().map(Path::to_path_buf).unwrap_or(common))
 }
 
 /// The seed this repository's new worktrees start from.
@@ -171,11 +178,7 @@ fn start_background(repo: &Checkout, command_name: &str, args: &[&str]) -> io::R
         .open(&log_path)?;
     // Run from the primary checkout: a process that names or stands in the new
     // worktree would keep it busy for tools that remove worktrees.
-    let primary = repo
-        .common_dir()?
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
+    let primary = primary_checkout(repo)?;
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(["seed", command_name])
@@ -257,11 +260,7 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
         println!("cargo-seed: {} is at {followed} already", current.display());
         return retire_old_seeds(&repo, current);
     }
-    let primary = repo
-        .common_dir()?
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
+    let primary = primary_checkout(&repo)?;
     let parent = primary.parent().unwrap_or(&primary).to_path_buf();
     let min_free_gb: u64 = repo
         .config(MIN_FREE_KEY)
@@ -508,7 +507,28 @@ fn free_bytes(path: &Path) -> Option<u64> {
         .then(|| u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
 }
 
-#[cfg(not(unix))]
-fn free_bytes(_path: &Path) -> Option<u64> {
-    None
+#[cfg(windows)]
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            available_to_caller: *mut u64,
+            total: *mut u64,
+            free: *mut u64,
+        ) -> i32;
+    }
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut available = 0u64;
+    // SAFETY: a NUL-terminated path; the two outputs may be null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(available)
 }

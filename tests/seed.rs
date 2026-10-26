@@ -166,6 +166,7 @@ fn main() {
             &["config", "user.email", "t@t"],
             &["config", "user.name", "t"],
             &["config", "commit.gpgsign", "false"],
+            &["config", "seed.minFreeGb", "0"],
             &["add", "-A"],
             &["commit", "-qm", "seed"],
         ] {
