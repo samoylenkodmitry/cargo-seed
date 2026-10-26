@@ -87,13 +87,6 @@ impl Checkout {
         (output.status.success() && !text.is_empty()).then_some(text)
     }
 
-    pub(crate) fn run<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-        &self,
-        args: I,
-    ) -> io::Result<()> {
-        self.bytes(args).map(drop)
-    }
-
     pub(crate) fn top(&self) -> io::Result<PathBuf> {
         Ok(PathBuf::from(self.text(["rev-parse", "--show-toplevel"])?))
     }
@@ -113,12 +106,6 @@ impl Checkout {
 
     pub(crate) fn config(&self, key: &str) -> Option<String> {
         self.try_text(["config", "--get", key])
-    }
-
-    pub(crate) fn config_all(&self, key: &str) -> Vec<String> {
-        self.try_text(["config", "--get-all", key])
-            .map(|text| text.lines().map(str::to_owned).collect())
-            .unwrap_or_default()
     }
 
     /// Every file and directory of HEAD by path, symlinks and submodules left out.
@@ -168,13 +155,6 @@ impl Checkout {
             }
         }
         Ok(edited)
-    }
-
-    /// Whether the checkout holds anything but build output: changes to
-    /// tracked files, or untracked files other than `target/`.
-    pub(crate) fn has_work(&self) -> io::Result<bool> {
-        let status = self.text(["status", "--porcelain=v1", "--untracked-files=normal"])?;
-        Ok(status.lines().any(|line| line != "?? target/"))
     }
 
     pub(crate) fn worktrees(&self) -> io::Result<Vec<Worktree>> {

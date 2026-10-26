@@ -1,6 +1,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// The directories of a cargo target that hold a `.fingerprint`:
 /// `<target>/<profile>` and `<target>/<triple>/<profile>`.
@@ -64,4 +65,18 @@ pub(crate) fn cargo_targets(root: &Path) -> io::Result<Vec<PathBuf>> {
     }
     found.sort();
     Ok(found)
+}
+
+/// The newest mtime of the target's profile directories and their
+/// `.fingerprint`, which cargo rewrites whenever it builds anything.
+pub(crate) fn newest_build(target: &Path) -> io::Result<Option<SystemTime>> {
+    let mut newest = None;
+    for profile in profile_dirs(target)? {
+        for dir in [profile.clone(), profile.join(".fingerprint")] {
+            if let Ok(modified) = fs::metadata(&dir).and_then(|meta| meta.modified()) {
+                newest = newest.max(Some(modified));
+            }
+        }
+    }
+    Ok(newest)
 }

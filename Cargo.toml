@@ -1,9 +1,9 @@
 [package]
 name = "cargo-seed"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89"
-description = "New git worktrees start with a warm cargo target copied from a seed; unused build output is removed"
+description = "New git worktrees start with a copy of the closest worktree's cargo target; unused build output is removed"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/samoylenkodmitry/cargo-seed"
 readme = "README.md"

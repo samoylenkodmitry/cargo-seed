@@ -221,7 +221,7 @@ fn main() {
         let tree = self.worktree(name, commit);
         self.cargo_seed(
             &tree,
-            &["seed", "clone", "--seed", self.seed().to_str().unwrap()],
+            &["seed", "clone", "--from", self.seed().to_str().unwrap()],
         );
         tree
     }
@@ -313,7 +313,6 @@ fn edits_after_seeding_rebuild() {
 fn the_hook_seeds_new_worktrees_and_leaves_branch_switches_alone() {
     let fixture = Fixture::new();
     let seed = fixture.seed();
-    fixture.git(&seed, &["config", "seed.path", seed.to_str().unwrap()]);
     fixture.cargo_seed(&seed, &["seed", "install-hook"]);
     let tree = fixture.root.join("hooked");
     fixture.git(
@@ -334,63 +333,6 @@ fn the_hook_seeds_new_worktrees_and_leaves_branch_switches_alone() {
 }
 
 #[test]
-fn refresh_makes_a_warm_seed_at_the_remote_and_retires_the_old_one() {
-    let fixture = Fixture::new();
-    let seed = fixture.seed();
-    let origin = fixture.root.join("origin.git");
-    fixture.git(
-        &fixture.root,
-        &["init", "-q", "--bare", origin.to_str().unwrap()],
-    );
-    fixture.git(
-        &seed,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    fixture.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
-    fixture.git(&seed, &["config", "seed.ref", "origin/main"]);
-    let refresh =
-        || fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-
-    refresh();
-    let first = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
-    assert_eq!(
-        fixture.git(&first, &["rev-parse", "HEAD"]),
-        fixture.git(&seed, &["rev-parse", "origin/main"])
-    );
-    let locks = fixture.git(&seed, &["worktree", "list", "--porcelain"]);
-    assert_eq!(
-        locks
-            .lines()
-            .filter(|line| *line == "locked cargo seed")
-            .count(),
-        1
-    );
-    assert_eq!(
-        fixture.compiled(&first),
-        Vec::<String>::new(),
-        "the seed is not warm"
-    );
-
-    let next = fixture.worktree("next", "origin/main");
-    fixture.git(&next, &["switch", "-q", "-c", "next"]);
-    write(
-        &next.join("base/src/lib.rs"),
-        "pub fn value() -> u32 { 5 }\n",
-    );
-    fixture.git(&next, &["commit", "-qam", "next"]);
-    fixture.git(&next, &["push", "-q", "origin", "HEAD:main"]);
-
-    refresh();
-    let second = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
-    assert_eq!(
-        fixture.git(&second, &["rev-parse", "HEAD"]),
-        fixture.git(&next, &["rev-parse", "HEAD"])
-    );
-    assert!(!first.exists(), "the old seed is still there");
-    assert!(fixture.run(&second).starts_with("5 "));
-}
-
-#[test]
 fn the_hook_runs_before_an_existing_hook_can_exit() {
     let fixture = Fixture::new();
     let seed = fixture.seed();
@@ -398,7 +340,6 @@ fn the_hook_runs_before_an_existing_hook_can_exit() {
         &seed.join(".git/hooks/post-checkout"),
         "#!/bin/sh\nexit 0\n",
     );
-    fixture.git(&seed, &["config", "seed.path", seed.to_str().unwrap()]);
     fixture.cargo_seed(&seed, &["seed", "install-hook"]);
     let tree = fixture.root.join("hooked");
     fixture.git(
@@ -463,23 +404,12 @@ fn age(path: &Path, minutes: u64) {
 }
 
 #[test]
-fn prune_removes_idle_incremental_state_but_not_a_seeds_or_a_busy_targets() {
+fn prune_removes_idle_incremental_state_but_not_a_busy_targets() {
     let fixture = Fixture::new();
     let seed = fixture.seed();
     let idle_tree = fixture.worktree("idle", "HEAD");
     let busy_tree = fixture.worktree("busy", "HEAD");
-    let locked = fixture.worktree("locked-seed", "HEAD");
-    fixture.git(
-        &seed,
-        &[
-            "worktree",
-            "lock",
-            "--reason",
-            "cargo seed",
-            locked.to_str().unwrap(),
-        ],
-    );
-    for tree in [&idle_tree, &busy_tree, &locked] {
+    for tree in [&idle_tree, &busy_tree] {
         for (name, minutes) in [("idle_crate-1", 600), ("recent_crate-2", 5)] {
             let dir = tree.join("target/debug/incremental").join(name);
             write(&dir.join("s-session/query-cache.bin"), "state");
@@ -507,11 +437,10 @@ fn prune_removes_idle_incremental_state_but_not_a_seeds_or_a_busy_targets() {
         idle(&busy_tree),
         "a target with a build in flight lost state"
     );
-    assert!(idle(&locked), "a seed lost state");
 }
 
 #[test]
-fn a_clone_carries_the_cache_tag_sweeps_recognise_even_when_the_seed_lacks_it() {
+fn a_copy_carries_the_cache_tag_sweeps_recognise_even_when_the_donor_lacks_it() {
     let fixture = Fixture::new();
     fs::remove_file(fixture.seed().join("target/CACHEDIR.TAG")).unwrap();
     let tree = fixture.seeded("tagged", "HEAD");
@@ -644,87 +573,95 @@ fn dedupe_shares_only_identical_files_and_keeps_their_content_and_times() {
     let _ = fs::remove_dir_all(&root);
 }
 
-#[test]
-fn refresh_rebuilds_a_seed_whose_warm_up_failed_and_waits_for_disk() {
-    let fixture = Fixture::new();
-    let seed = fixture.seed();
-    let origin = fixture.root.join("origin.git");
-    fixture.git(
-        &fixture.root,
-        &["init", "-q", "--bare", origin.to_str().unwrap()],
-    );
-    fixture.git(
-        &seed,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    fixture.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
-    fixture.git(&seed, &["config", "seed.ref", "origin/main"]);
-    let current = || PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
-
-    fixture.cargo_seed(
-        &seed,
-        &[
-            "seed",
-            "refresh",
-            "--warm",
-            "cargo build -p app",
-            "--warm",
-            "cargo build -p no-such-package",
-        ],
-    );
-    let failed = current();
-    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-    let rebuilt = current();
-    assert_ne!(rebuilt, failed, "a seed whose warm-up failed stayed");
-    assert!(!failed.exists(), "the failed seed was not retired");
-    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-    assert_eq!(
-        current(),
-        rebuilt,
-        "a whole seed at the same commit was rebuilt"
-    );
-
-    fixture.git(&seed, &["config", "seed.minFreeGb", "999999999"]);
-    let next = fixture.worktree("next", "origin/main");
-    fixture.git(&next, &["switch", "-q", "-c", "next"]);
-    write(
-        &next.join("base/src/lib.rs"),
-        "pub fn value() -> u32 { 9 }\n",
-    );
-    fixture.git(&next, &["commit", "-qam", "next"]);
-    fixture.git(&next, &["push", "-q", "origin", "HEAD:main"]);
-    let report = fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-    assert!(report.contains("no refresh"), "{report}");
-    assert_eq!(
-        current(),
-        rebuilt,
-        "a refresh started without the disk it needs"
-    );
+/// Holds cargo's build lock on `tree`'s target as a running build does.
+fn hold_build_lock(tree: &Path) -> fs::File {
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(tree.join("target/debug/.cargo-build-lock"))
+        .unwrap();
+    lock.lock().unwrap();
+    lock
 }
 
 #[test]
-fn refresh_rebuilds_a_seed_whose_target_was_removed() {
+fn a_new_worktree_copies_the_closest_worktree() {
     let fixture = Fixture::new();
     let seed = fixture.seed();
-    let origin = fixture.root.join("origin.git");
-    fixture.git(
-        &fixture.root,
-        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    let branch = fixture.worktree("work", "HEAD");
+    fixture.git(&branch, &["switch", "-q", "-c", "work"]);
+    write(
+        &branch.join("base/src/lib.rs"),
+        "pub fn value() -> u32 { 4 }\n",
     );
-    fixture.git(
-        &seed,
-        &["remote", "add", "origin", origin.to_str().unwrap()],
-    );
-    fixture.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
-    fixture.git(&seed, &["config", "seed.ref", "origin/main"]);
-    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-    let first = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
-    fs::remove_dir_all(first.join("target")).unwrap();
-    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
-    let second = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
+    fixture.git(&branch, &["commit", "-qam", "work"]);
+    fixture.cargo(&branch, &["build", "--quiet"]);
+    let tree = fixture.worktree("next", "work");
+    let report = fixture.cargo_seed(&tree, &["seed", "clone"]);
     assert!(
-        second.join("target").is_dir(),
-        "the seed stayed without a target"
+        report.contains(&format!("from {}", branch.display())),
+        "{report}"
     );
-    assert_eq!(fixture.compiled(&second), Vec::<String>::new());
+    assert_eq!(fixture.run(&tree), fixture.expected(&tree, "4 2 data-1"));
+    let _ = seed;
+}
+
+#[test]
+fn a_worktree_with_a_build_running_is_not_copied() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let _build = hold_build_lock(&seed);
+    let tree = fixture.worktree("next", "HEAD");
+    let report = fixture.cargo_seed(&tree, &["seed", "clone"]);
+    assert!(report.contains("no worktree"), "{report}");
+    assert!(!tree.join("target").exists());
+}
+
+#[test]
+fn gc_removes_targets_unused_for_days_and_keeps_recent_and_busy_ones() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let old = fixture.seeded("old", "HEAD");
+    let recent = fixture.seeded("recent", "HEAD");
+    let busy = fixture.seeded("busy", "HEAD");
+    for (tree, minutes) in [(&old, 5 * 24 * 60), (&recent, 3 * 60), (&busy, 5 * 24 * 60)] {
+        for dir in [
+            tree.join("target/debug/.fingerprint"),
+            tree.join("target/debug"),
+            tree.join("target"),
+        ] {
+            age(&dir, minutes);
+        }
+    }
+    let _build = hold_build_lock(&busy);
+    let root = fixture.root.to_str().unwrap().to_owned();
+    let gc = |apply: bool| {
+        let mut args = vec![
+            "seed",
+            "gc",
+            "--root",
+            &root,
+            "--max-idle-days",
+            "3",
+            "--min-free-gb",
+            "0",
+        ];
+        if apply {
+            args.push("--apply");
+        }
+        fixture.cargo_seed(&seed, &args)
+    };
+    gc(false);
+    assert!(old.join("target").exists(), "a dry run removed a target");
+    gc(true);
+    assert!(
+        !old.join("target").exists(),
+        "a target unused for 5 days stayed"
+    );
+    assert!(recent.join("target").exists(), "a recent target went");
+    assert!(
+        busy.join("target").exists(),
+        "a target with a build running went"
+    );
 }

@@ -4,10 +4,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::build_lock::BuildLock;
+use crate::disk::gigabytes;
 use crate::git::Checkout;
-use crate::real_path::real_path;
-use crate::seed::LOCK_REASON;
-use crate::target_dir::{cargo_targets, incremental_crate_dirs, profile_dirs};
+use crate::target_dir::{cargo_targets, incremental_crate_dirs, newest_build, profile_dirs};
 
 /// A target written within this long has a build in flight.
 const BUSY: Duration = Duration::from_secs(15 * 60);
@@ -57,7 +57,8 @@ impl Swept {
 
 /// `cargo seed prune [REPO] [--root DIR] [--idle-minutes N] [--apply]`
 ///
-/// Seeds and targets with a build in flight are left alone.
+/// Targets with a build running or finished in the last 15 minutes are left
+/// alone: tests may still run from them.
 pub(crate) fn prune(scope: Scope, idle: Duration, apply: bool) -> io::Result<()> {
     let targets = match scope {
         Scope::Repo(repo) => Checkout::new(&repo)
@@ -71,10 +72,8 @@ pub(crate) fn prune(scope: Scope, idle: Duration, apply: bool) -> io::Result<()>
     let now = SystemTime::now();
     let mut total = Swept::default();
     for target in targets {
-        if is_seed(&target) {
-            continue;
-        }
-        if newest_build(&target)?.is_some_and(|built| age(now, built) < BUSY) {
+        let recent = newest_build(&target)?.is_some_and(|built| age(now, built) < BUSY);
+        if recent || BuildLock::try_shared(&target)?.is_none() {
             println!("{}: a build is in flight; kept", target.display());
             continue;
         }
@@ -91,20 +90,6 @@ pub(crate) fn prune(scope: Scope, idle: Duration, apply: bool) -> io::Result<()>
     };
     println!("{verb} {}", total.describe());
     Ok(())
-}
-
-/// Whether `target` belongs to a seed worktree, which clones read.
-fn is_seed(target: &Path) -> bool {
-    let Some(worktree) = target.parent() else {
-        return false;
-    };
-    let worktree = real_path(worktree).unwrap_or_else(|_| worktree.to_path_buf());
-    Checkout::new(&worktree).worktrees().is_ok_and(|worktrees| {
-        worktrees.iter().any(|listed| {
-            real_path(&listed.path).is_ok_and(|path| path == worktree)
-                && listed.lock_reason.as_deref() == Some(LOCK_REASON)
-        })
-    })
 }
 
 /// Removes from `target` the incremental state of crates no build touched
@@ -229,24 +214,6 @@ fn remove_unit(profile: &Path, unit: &str, apply: bool) -> io::Result<u64> {
 
 fn age(now: SystemTime, then: SystemTime) -> Duration {
     now.duration_since(then).unwrap_or_default()
-}
-
-fn gigabytes(bytes: u64) -> String {
-    format!("{:.1} GB", bytes as f64 / 1e9)
-}
-
-/// The newest mtime of the target's profile directories and their
-/// `.fingerprint`, which cargo rewrites whenever it builds anything.
-fn newest_build(target: &Path) -> io::Result<Option<SystemTime>> {
-    let mut newest = None;
-    for profile in profile_dirs(target)? {
-        for dir in [profile.clone(), profile.join(".fingerprint")] {
-            if let Ok(modified) = fs::metadata(&dir).and_then(|meta| meta.modified()) {
-                newest = newest.max(Some(modified));
-            }
-        }
-    }
-    Ok(newest)
 }
 
 /// Bytes the files at or under `path` hold.
