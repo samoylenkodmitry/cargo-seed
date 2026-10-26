@@ -41,8 +41,9 @@ pub(crate) fn incremental_crate_dirs(target: &Path) -> io::Result<Vec<PathBuf>> 
     Ok(found)
 }
 
-/// Every cargo target under `root`: a directory carrying cargo's cache tag.
-/// The walk skips `.git` and `node_modules` and does not enter a target.
+/// Every cargo target under `root`: a directory carrying the cache tag and a
+/// profile with a `.fingerprint`. Other tools, ruff for one, tag their caches
+/// too. The walk skips `.git` and `node_modules` and enters no tagged cache.
 pub(crate) fn cargo_targets(root: &Path) -> io::Result<Vec<PathBuf>> {
     const SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
     let mut found = Vec::new();
@@ -50,7 +51,9 @@ pub(crate) fn cargo_targets(root: &Path) -> io::Result<Vec<PathBuf>> {
     while let Some(dir) = pending.pop() {
         let tag = dir.join("CACHEDIR.TAG");
         if fs::read_to_string(&tag).is_ok_and(|text| text.starts_with(SIGNATURE)) {
-            found.push(dir);
+            if !profile_dirs(&dir)?.is_empty() {
+                found.push(dir);
+            }
             continue;
         }
         for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {

@@ -37,7 +37,7 @@ cargo seed maintain --root ~/projects   # e.g. hourly
 runs these three, which also work alone (without `--apply` they only report):
 
 - `gc`: removes whole targets, least recently built first: every target
-  unused for 3 days (`--max-idle-days`), then more until 100 GB are free
+  unused for 3 days (`--max-idle-days`), then more until 50 GB are free
   (`--min-free-gb`). A repository nobody works on costs no disk.
 - `prune`: removes incremental state no build touched for an hour, and builds
   that a newer build of the same unit replaced, such as the old build left by

@@ -41,7 +41,7 @@ usage:
   cargo seed gc --root DIR [--min-free-gb N] [--max-idle-days N] [--apply]
       Remove whole targets under DIR, least recently built first: every one
       unused for N days (default 3), then more until N GB are free
-      (default 100).
+      (default 50).
   cargo seed maintain --root DIR
       gc, prune and dedupe with their defaults, applied: for a scheduled job.
 
@@ -84,7 +84,7 @@ fn parse(rest: &[String]) -> Result<Options, String> {
         hook: false,
         apply: false,
         idle_minutes: 60,
-        min_free_gb: 100,
+        min_free_gb: 50,
         max_idle_days: 3,
     };
     let mut path = None;

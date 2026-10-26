@@ -588,7 +588,7 @@ fn hold_build_lock(tree: &Path) -> fs::File {
 #[test]
 fn a_new_worktree_copies_the_closest_worktree() {
     let fixture = Fixture::new();
-    let seed = fixture.seed();
+    fixture.seed();
     let branch = fixture.worktree("work", "HEAD");
     fixture.git(&branch, &["switch", "-q", "-c", "work"]);
     write(
@@ -604,7 +604,6 @@ fn a_new_worktree_copies_the_closest_worktree() {
         "{report}"
     );
     assert_eq!(fixture.run(&tree), fixture.expected(&tree, "4 2 data-1"));
-    let _ = seed;
 }
 
 #[test]
@@ -634,6 +633,13 @@ fn gc_removes_targets_unused_for_days_and_keeps_recent_and_busy_ones() {
             age(&dir, minutes);
         }
     }
+    // Other tools tag their caches the same way, ruff for one.
+    let other_cache = fixture.root.join("tool/.ruff_cache");
+    write(
+        &other_cache.join("CACHEDIR.TAG"),
+        "Signature: 8a477f597d28d172789f06886806bc55\n",
+    );
+    age(&other_cache, 5 * 24 * 60);
     let _build = hold_build_lock(&busy);
     let root = fixture.root.to_str().unwrap().to_owned();
     let gc = |apply: bool| {
@@ -664,4 +670,5 @@ fn gc_removes_targets_unused_for_days_and_keeps_recent_and_busy_ones() {
         busy.join("target").exists(),
         "a target with a build running went"
     );
+    assert!(other_cache.exists(), "another tool's cache went");
 }
