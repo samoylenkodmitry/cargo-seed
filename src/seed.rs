@@ -142,10 +142,18 @@ fn start_background_refresh(repo: &Checkout) -> io::Result<()> {
         .create(true)
         .append(true)
         .open(&log_path)?;
+    // Run from the primary checkout: a process that names or stands in the new
+    // worktree would keep it busy for tools that remove worktrees.
+    let primary = repo
+        .common_dir()?
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     let mut command = Command::new(std::env::current_exe()?);
     command
         .args(["seed", "refresh"])
-        .arg(repo.top()?)
+        .arg(&primary)
+        .current_dir(&primary)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
