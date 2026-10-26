@@ -48,6 +48,17 @@ it.
 `install-hook` writes only the repository's own `.git/hooks/post-checkout`.
 When `core.hooksPath` is set, it prints the line to add there.
 
+## Disk
+
+Most of a busy worktree's target is rustc's incremental state, one directory
+per crate, feature set, profile and test target, and most of it belongs to
+builds the worktree stopped repeating. `cargo seed prune --apply` removes the
+incremental directories no build touched for an hour (`--idle-minutes N`) in
+the targets of the repository's worktrees. Seeds keep theirs, and so does a
+target with a build in flight. rustc rebuilds such a crate without reuse the
+next time it changes. On one machine this found 36.7 GB in 1542 crate
+directories without removing a single target.
+
 ## Measured
 
 On a 41-crate, 698-package workspace (Cranpose):

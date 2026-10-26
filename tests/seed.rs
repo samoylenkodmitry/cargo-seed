@@ -430,3 +430,57 @@ fn install_hook_leaves_a_hooks_path_folder_alone() {
             .contains("cargo-seed seed clone")
     );
 }
+
+/// Gives `path` a modification time `minutes` in the past.
+fn age(path: &Path, minutes: u64) {
+    let then = std::time::SystemTime::now() - std::time::Duration::from_secs(minutes * 60);
+    fs::File::open(path).unwrap().set_modified(then).unwrap();
+}
+
+#[test]
+fn prune_removes_idle_incremental_state_but_not_a_seeds_or_a_busy_targets() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let idle_tree = fixture.worktree("idle", "HEAD");
+    let busy_tree = fixture.worktree("busy", "HEAD");
+    let locked = fixture.worktree("locked-seed", "HEAD");
+    fixture.git(
+        &seed,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "cargo seed",
+            locked.to_str().unwrap(),
+        ],
+    );
+    for tree in [&idle_tree, &busy_tree, &locked] {
+        for (name, minutes) in [("idle_crate-1", 600), ("recent_crate-2", 5)] {
+            let dir = tree.join("target/debug/incremental").join(name);
+            write(&dir.join("s-session/query-cache.bin"), "state");
+            age(&dir, minutes);
+        }
+        fs::create_dir_all(tree.join("target/debug/.fingerprint")).unwrap();
+        let built = if tree == &busy_tree { 1 } else { 600 };
+        age(&tree.join("target/debug/.fingerprint"), built);
+        age(&tree.join("target/debug"), built);
+    }
+    let idle = |tree: &Path| tree.join("target/debug/incremental/idle_crate-1").exists();
+
+    fixture.cargo_seed(&seed, &["seed", "prune"]);
+    assert!(idle(&idle_tree), "a dry run removed state");
+
+    fixture.cargo_seed(&seed, &["seed", "prune", "--apply"]);
+    assert!(!idle(&idle_tree), "idle state stayed");
+    assert!(
+        idle_tree
+            .join("target/debug/incremental/recent_crate-2")
+            .exists(),
+        "recent state went"
+    );
+    assert!(
+        idle(&busy_tree),
+        "a target with a build in flight lost state"
+    );
+    assert!(idle(&locked), "a seed lost state");
+}

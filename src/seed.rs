@@ -7,6 +7,7 @@ use std::time::{Instant, SystemTime};
 use crate::fingerprint::move_fingerprints;
 use crate::git::Checkout;
 use crate::mtimes::copy_mtimes;
+use crate::target_dir::incremental_crate_dirs;
 use crate::tree_copy::{copy_tree, set_times};
 
 /// Git config keys. `seed.path` is written by `refresh`; the others are the user's.
@@ -15,7 +16,7 @@ const WARM_KEY: &str = "seed.warm";
 const REF_KEY: &str = "seed.ref";
 const AUTO_REFRESH_KEY: &str = "seed.autoRefresh";
 /// The reason a seed worktree is locked with, which marks it as one.
-const LOCK_REASON: &str = "cargo seed";
+pub(crate) const LOCK_REASON: &str = "cargo seed";
 /// Built into a seed when `seed.warm` names nothing.
 const DEFAULT_WARM: &str = "cargo build --workspace --all-targets";
 
@@ -69,19 +70,8 @@ fn seed_tree(seed: &Path, tree: &Path) -> io::Result<()> {
 /// current; rustc reads its session names, not these times.
 fn mark_incremental_current(target: &Path) -> io::Result<()> {
     let now = SystemTime::now();
-    for level in fs::read_dir(target)? {
-        let level = level?.path();
-        for incremental in [level.join("incremental")].into_iter().chain(
-            fs::read_dir(&level)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|entry| entry.path().join("incremental")),
-        ) {
-            for crate_dir in fs::read_dir(&incremental).into_iter().flatten().flatten() {
-                set_times(&crate_dir.path(), now, now)?;
-            }
-        }
+    for crate_dir in incremental_crate_dirs(target)? {
+        set_times(&crate_dir, now, now)?;
     }
     Ok(())
 }

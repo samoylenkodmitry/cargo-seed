@@ -3,7 +3,9 @@
 mod fingerprint;
 mod git;
 mod mtimes;
+mod prune;
 mod seed;
+mod target_dir;
 mod tree_copy;
 
 use std::path::PathBuf;
@@ -27,6 +29,10 @@ usage:
   cargo seed install-hook [REPO]
       Make `git worktree add` run `clone` for every new worktree.
   cargo seed status [REPO]
+  cargo seed prune [REPO] [--idle-minutes N] [--apply]
+      Remove the incremental state of crates no build touched for N minutes
+      (default 60) from the targets of the repository's worktrees; seeds and
+      targets with a build in flight keep theirs. Without --apply, reports.
 
 git config:
   seed.warm         a warm command; repeat the key for more
@@ -58,12 +64,21 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut seed_path = None;
     let mut warm = Vec::new();
     let mut from_hook = false;
+    let mut apply = false;
+    let mut idle_minutes = 60;
     let mut rest = rest.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--seed" => seed_path = Some(PathBuf::from(rest.next().ok_or("--seed needs a path")?)),
             "--warm" => warm.push(rest.next().ok_or("--warm needs a command")?.clone()),
             "--hook" => from_hook = true,
+            "--apply" => apply = true,
+            "--idle-minutes" => {
+                idle_minutes = rest
+                    .next()
+                    .and_then(|minutes| minutes.parse().ok())
+                    .ok_or("--idle-minutes needs a number")?
+            }
             "-h" | "--help" => {
                 print!("{USAGE}");
                 return Ok(());
@@ -81,6 +96,11 @@ fn run(args: &[String]) -> Result<(), String> {
         "clone" => seed::clone(&path, seed_path.as_deref(), from_hook),
         "install-hook" => seed::install_hook(&path),
         "status" => seed::status(&path),
+        "prune" => prune::prune(
+            &path,
+            std::time::Duration::from_secs(idle_minutes * 60),
+            apply,
+        ),
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(())

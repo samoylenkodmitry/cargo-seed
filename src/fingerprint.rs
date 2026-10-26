@@ -20,6 +20,7 @@ use std::fs;
 use std::io;
 use std::path::{MAIN_SEPARATOR, Path};
 
+use crate::target_dir::profile_dirs;
 use crate::tree_copy::set_times;
 
 /// What the records change: counts for the report.
@@ -109,27 +110,6 @@ pub(crate) fn move_fingerprints(target: &Path, seed: &Path, tree: &Path) -> io::
         }
     }
     Ok(moved)
-}
-
-/// Directories that hold a `.fingerprint`: `<target>/<profile>` and `<target>/<triple>/<profile>`.
-fn profile_dirs(target: &Path) -> io::Result<Vec<std::path::PathBuf>> {
-    let mut found = Vec::new();
-    for level in fs::read_dir(target)? {
-        let level = level?.path();
-        if !level.is_dir() {
-            continue;
-        }
-        if level.join(".fingerprint").is_dir() {
-            found.push(level.clone());
-        }
-        for nested in fs::read_dir(&level)? {
-            let nested = nested?.path();
-            if nested.join(".fingerprint").is_dir() {
-                found.push(nested);
-            }
-        }
-    }
-    Ok(found)
 }
 
 fn unit_hash(name: &str) -> &str {
