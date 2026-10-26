@@ -2,7 +2,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::fingerprint::move_fingerprints;
 use crate::git::Checkout;
@@ -19,6 +19,8 @@ const REF_KEY: &str = "seed.ref";
 const AUTO_REFRESH_KEY: &str = "seed.autoRefresh";
 /// The reason a seed worktree is locked with, which marks it as one.
 pub(crate) const LOCK_REASON: &str = "cargo seed";
+/// How often new worktrees start a prune of the repository's worktrees.
+const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// The tag cargo writes into a target it creates (https://bford.info/cachedir/).
 const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This file is a cache directory tag created by cargo.\n\
@@ -132,14 +134,31 @@ pub(crate) fn clone(tree: &Path, seed: Option<&Path>, from_hook: bool) -> io::Re
         if followed
             .is_some_and(|commit| Checkout::new(&seed).head().is_ok_and(|head| head != commit))
         {
-            start_background_refresh(&tree_git)?;
+            start_background(&tree_git, "refresh", &[])?;
         }
+    }
+    if from_hook && prune_due(&tree_git)? {
+        start_background(&tree_git, "prune", &["--apply"])?;
     }
     Ok(())
 }
 
-fn start_background_refresh(repo: &Checkout) -> io::Result<()> {
-    let log_path = state_dir(repo)?.join("refresh.log");
+/// Whether the repository's worktrees went an hour without a prune; marks
+/// one as started when they did. New worktrees are when targets grow.
+fn prune_due(repo: &Checkout) -> io::Result<bool> {
+    let stamp = state_dir(repo)?.join("last-prune");
+    let last = fs::metadata(&stamp).and_then(|meta| meta.modified()).ok();
+    if last.is_some_and(|last| last.elapsed().unwrap_or_default() < PRUNE_INTERVAL) {
+        return Ok(false);
+    }
+    fs::write(&stamp, "")?;
+    Ok(true)
+}
+
+/// Runs `cargo seed <command> <primary checkout> <args>` detached, logging
+/// to `<command>.log` in the repository's seed state.
+fn start_background(repo: &Checkout, command_name: &str, args: &[&str]) -> io::Result<()> {
+    let log_path = state_dir(repo)?.join(format!("{command_name}.log"));
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -153,8 +172,9 @@ fn start_background_refresh(repo: &Checkout) -> io::Result<()> {
         .unwrap_or_default();
     let mut command = Command::new(std::env::current_exe()?);
     command
-        .args(["seed", "refresh"])
+        .args(["seed", command_name])
         .arg(&primary)
+        .args(args)
         .current_dir(&primary)
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
@@ -162,7 +182,7 @@ fn start_background_refresh(repo: &Checkout) -> io::Result<()> {
     detach(&mut command);
     command.spawn()?;
     println!(
-        "cargo-seed: refreshing the seed in the background, log: {}",
+        "cargo-seed: {command_name} runs in the background, log: {}",
         log_path.display()
     );
     Ok(())

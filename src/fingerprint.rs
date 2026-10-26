@@ -261,10 +261,10 @@ fn units_holding_seed_paths(profile: &Path, roots: &Roots) -> io::Result<HashSet
             .filter_map(|line| line.strip_prefix(b"# env-dep:"))
             .any(|assignment| {
                 let (name, value) = match find(assignment, b"=") {
-                    Some(at) => (&assignment[..at], &assignment[at + 1..]),
-                    None => (assignment, &[][..]),
+                    Some(at) => (&assignment[..at], unescape_env(&assignment[at + 1..])),
+                    None => (assignment, Vec::new()),
                 };
-                roots.named_in(value) && !(name == b"OUT_DIR" && value.starts_with(&seed_target))
+                roots.named_in(&value) && !(name == b"OUT_DIR" && value.starts_with(&seed_target))
             });
         if names_seed {
             hashes.insert(hash);
@@ -319,4 +319,25 @@ fn checks_only(data: &[u8], hash: &str) -> bool {
             find(base, marker.as_bytes()).is_some()
         })
         .all(|output| output.ends_with(b".rmeta") || output.ends_with(b".d"))
+}
+
+/// An env-dep value as rustc meant it: rustc writes `\\` for a backslash and
+/// `\n` and `\r` for line breaks, so Windows paths arrive with every
+/// separator doubled.
+fn unescape_env(value: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.len());
+    let mut bytes = value.iter();
+    while let Some(&byte) = bytes.next() {
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        match bytes.next() {
+            Some(b'n') => out.push(b'\n'),
+            Some(b'r') => out.push(b'\r'),
+            Some(&other) => out.push(other),
+            None => out.push(b'\\'),
+        }
+    }
+    out
 }
