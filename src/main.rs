@@ -29,10 +29,12 @@ usage:
   cargo seed install-hook [REPO]
       Make `git worktree add` run `clone` for every new worktree.
   cargo seed status [REPO]
-  cargo seed prune [REPO] [--idle-minutes N] [--apply]
-      Remove the incremental state of crates no build touched for N minutes
-      (default 60) from the targets of the repository's worktrees; seeds and
-      targets with a build in flight keep theirs. Without --apply, reports.
+  cargo seed prune [REPO] [--root DIR] [--idle-minutes N] [--apply]
+      Remove from the targets of the repository's worktrees, or of every
+      cargo target under DIR, the incremental state no build touched for N
+      minutes (default 60) and the builds a newer build of the same unit
+      replaced. Seeds and targets with a build in flight are left alone.
+      Without --apply, reports.
 
 git config:
   seed.warm         a warm command; repeat the key for more
@@ -66,6 +68,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut from_hook = false;
     let mut apply = false;
     let mut idle_minutes = 60;
+    let mut root = None;
     let mut rest = rest.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -73,6 +76,11 @@ fn run(args: &[String]) -> Result<(), String> {
             "--warm" => warm.push(rest.next().ok_or("--warm needs a command")?.clone()),
             "--hook" => from_hook = true,
             "--apply" => apply = true,
+            "--root" => {
+                root = Some(PathBuf::from(
+                    rest.next().ok_or("--root needs a directory")?,
+                ))
+            }
             "--idle-minutes" => {
                 idle_minutes = rest
                     .next()
@@ -97,7 +105,10 @@ fn run(args: &[String]) -> Result<(), String> {
         "install-hook" => seed::install_hook(&path),
         "status" => seed::status(&path),
         "prune" => prune::prune(
-            &path,
+            match root {
+                Some(root) => prune::Scope::Root(root),
+                None => prune::Scope::Repo(path),
+            },
             std::time::Duration::from_secs(idle_minutes * 60),
             apply,
         ),

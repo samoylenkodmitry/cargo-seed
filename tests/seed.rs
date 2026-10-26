@@ -493,3 +493,48 @@ fn a_clone_carries_the_cache_tag_sweeps_recognise_even_when_the_seed_lacks_it() 
     let tag = fs::read_to_string(tree.join("target/CACHEDIR.TAG")).unwrap();
     assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
 }
+
+#[test]
+fn prune_removes_builds_a_newer_build_replaced_and_keeps_the_target_fresh() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let fingerprints = seed.join("target/debug/.fingerprint");
+    let units = |prefix: &str| {
+        fs::read_dir(&fingerprints)
+            .unwrap()
+            .filter(|unit| {
+                unit.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(prefix)
+            })
+            .count()
+    };
+    // The workspace was built two hours ago; then `base` gets a new version,
+    // which builds `base` and its dependents again under new hashes.
+    for unit in fs::read_dir(&fingerprints).unwrap() {
+        age(&unit.unwrap().path(), 120);
+    }
+    write(
+        &seed.join("base/Cargo.toml"),
+        "[package]\nname = \"base\"\nversion = \"0.2.0\"\nedition = \"2021\"\n",
+    );
+    fixture.cargo(&seed, &["build", "--quiet"]);
+    assert_eq!(units("base-"), 2);
+    for dir in [seed.join("target/debug"), fingerprints.clone()] {
+        age(&dir, 20);
+    }
+
+    fixture.cargo_seed(
+        &seed,
+        &["seed", "prune", "--root", seed.to_str().unwrap(), "--apply"],
+    );
+    assert_eq!(units("base-"), 1, "the replaced build of base stayed");
+    assert_eq!(
+        fixture.compiled(&seed),
+        Vec::<String>::new(),
+        "a live build went"
+    );
+    assert_eq!(fixture.run(&seed), fixture.expected(&seed, "1 2 data-1"));
+}

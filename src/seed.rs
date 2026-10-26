@@ -7,6 +7,7 @@ use std::time::{Instant, SystemTime};
 use crate::fingerprint::move_fingerprints;
 use crate::git::Checkout;
 use crate::mtimes::copy_mtimes;
+use crate::prune::sweep;
 use crate::target_dir::incremental_crate_dirs;
 use crate::tree_copy::{copy_tree, set_times};
 
@@ -266,6 +267,7 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
         commands
     };
     let log = File::create(state.join("warm.log"))?;
+    let warm_started = SystemTime::now();
     for command in commands {
         let started = Instant::now();
         let status = shell(&command)
@@ -283,6 +285,13 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
             started.elapsed().as_secs()
         );
     }
+    // No clone reads the new seed yet: what it inherited from earlier seeds
+    // and the warm-up did not use goes now, before every clone carries it.
+    sweep(
+        &seed.join("target"),
+        warm_started.elapsed().unwrap_or_default(),
+        true,
+    )?;
     repo.run(["config", PATH_KEY, &seed.to_string_lossy()])?;
     println!(
         "cargo-seed: new worktrees now start from {}",

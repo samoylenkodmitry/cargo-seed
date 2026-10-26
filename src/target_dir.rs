@@ -39,3 +39,29 @@ pub(crate) fn incremental_crate_dirs(target: &Path) -> io::Result<Vec<PathBuf>> 
     }
     Ok(found)
 }
+
+/// Every cargo target under `root`: a directory carrying cargo's cache tag.
+/// The walk skips `.git` and `node_modules` and does not enter a target.
+pub(crate) fn cargo_targets(root: &Path) -> io::Result<Vec<PathBuf>> {
+    const SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let tag = dir.join("CACHEDIR.TAG");
+        if fs::read_to_string(&tag).is_ok_and(|text| text.starts_with(SIGNATURE)) {
+            found.push(dir);
+            continue;
+        }
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = entry.file_name();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && name != ".git"
+                && name != "node_modules"
+            {
+                pending.push(entry.path());
+            }
+        }
+    }
+    found.sort();
+    Ok(found)
+}
