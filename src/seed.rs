@@ -17,6 +17,10 @@ const REF_KEY: &str = "seed.ref";
 const AUTO_REFRESH_KEY: &str = "seed.autoRefresh";
 /// The reason a seed worktree is locked with, which marks it as one.
 pub(crate) const LOCK_REASON: &str = "cargo seed";
+/// The tag cargo writes into a target it creates (https://bford.info/cachedir/).
+const CACHEDIR_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
+# This file is a cache directory tag created by cargo.\n\
+# For information about cache directory tags see https://bford.info/cachedir/\n";
 /// Built into a seed when `seed.warm` names nothing.
 const DEFAULT_WARM: &str = "cargo build --workspace --all-targets";
 
@@ -53,6 +57,12 @@ fn followed_ref(repo: &Checkout) -> String {
 fn seed_tree(seed: &Path, tree: &Path) -> io::Result<()> {
     let target = tree.join("target");
     copy_tree(&seed.join("target"), &target)?;
+    // Cargo tags a target only when it creates the directory itself; sweeps
+    // recognise build output by the tag, so a clone always carries one.
+    let tag = target.join("CACHEDIR.TAG");
+    if !tag.exists() {
+        fs::write(&tag, CACHEDIR_TAG)?;
+    }
     mark_incremental_current(&target)?;
     let times = copy_mtimes(seed, tree)?;
     let moved = move_fingerprints(&target, seed, tree)?;

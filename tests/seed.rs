@@ -484,3 +484,12 @@ fn prune_removes_idle_incremental_state_but_not_a_seeds_or_a_busy_targets() {
     );
     assert!(idle(&locked), "a seed lost state");
 }
+
+#[test]
+fn a_clone_carries_the_cache_tag_sweeps_recognise_even_when_the_seed_lacks_it() {
+    let fixture = Fixture::new();
+    fs::remove_file(fixture.seed().join("target/CACHEDIR.TAG")).unwrap();
+    let tree = fixture.seeded("tagged", "HEAD");
+    let tag = fs::read_to_string(tree.join("target/CACHEDIR.TAG")).unwrap();
+    assert!(tag.starts_with("Signature: 8a477f597d28d172789f06886806bc55"));
+}
