@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::git::Checkout;
+use crate::real_path::real_path;
 use crate::seed::LOCK_REASON;
 use crate::target_dir::{cargo_targets, incremental_crate_dirs, profile_dirs};
 
@@ -97,10 +98,10 @@ fn is_seed(target: &Path) -> bool {
     let Some(worktree) = target.parent() else {
         return false;
     };
-    let worktree = fs::canonicalize(worktree).unwrap_or_else(|_| worktree.to_path_buf());
+    let worktree = real_path(worktree).unwrap_or_else(|_| worktree.to_path_buf());
     Checkout::new(&worktree).worktrees().is_ok_and(|worktrees| {
         worktrees.iter().any(|listed| {
-            fs::canonicalize(&listed.path).is_ok_and(|path| path == worktree)
+            real_path(&listed.path).is_ok_and(|path| path == worktree)
                 && listed.lock_reason.as_deref() == Some(LOCK_REASON)
         })
     })

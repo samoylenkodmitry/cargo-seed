@@ -8,6 +8,7 @@ use crate::fingerprint::move_fingerprints;
 use crate::git::Checkout;
 use crate::mtimes::copy_mtimes;
 use crate::prune::sweep;
+use crate::real_path::real_path;
 use crate::target_dir::incremental_crate_dirs;
 use crate::tree_copy::{copy_tree, set_times};
 
@@ -44,7 +45,7 @@ fn lock_file(repo: &Checkout, seed: &Path) -> io::Result<File> {
 /// The seed this repository's new worktrees start from.
 fn configured_seed(repo: &Checkout) -> Option<PathBuf> {
     repo.config(PATH_KEY)
-        .and_then(|path| fs::canonicalize(path).ok())
+        .and_then(|path| real_path(Path::new(&path)).ok())
 }
 
 /// The commit seeds follow: `seed.ref`, else the remote's default branch.
@@ -90,7 +91,7 @@ fn mark_incremental_current(target: &Path) -> io::Result<()> {
 /// `cargo seed clone [TREE] [--seed SEED] [--hook]`
 pub(crate) fn clone(tree: &Path, seed: Option<&Path>, from_hook: bool) -> io::Result<()> {
     let tree_git = Checkout::new(tree);
-    let tree = fs::canonicalize(tree_git.top()?)?;
+    let tree = real_path(&tree_git.top()?)?;
     if tree.join("target").exists() {
         if !from_hook {
             println!("cargo-seed: {} already has a target", tree.display());
@@ -98,7 +99,7 @@ pub(crate) fn clone(tree: &Path, seed: Option<&Path>, from_hook: bool) -> io::Re
         return Ok(());
     }
     let seed = match seed {
-        Some(seed) => fs::canonicalize(seed)?,
+        Some(seed) => real_path(seed)?,
         None => match configured_seed(&tree_git) {
             Some(seed) => seed,
             None if from_hook => return Ok(()),
@@ -254,7 +255,7 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
             seed_tree(current, &seed)?;
         }
     }
-    let seed = fs::canonicalize(&seed)?;
+    let seed = real_path(&seed)?;
     lower_priority();
     let commands = if warm.is_empty() {
         repo.config_all(WARM_KEY)
@@ -337,7 +338,7 @@ fn lower_priority() {}
 /// but build output; a later refresh retries the rest.
 fn retire_old_seeds(repo: &Checkout, current: &Path) -> io::Result<()> {
     for old in seed_worktrees(repo)? {
-        if fs::canonicalize(&old).is_ok_and(|old| old == current) {
+        if real_path(&old).is_ok_and(|old| old == current) {
             continue;
         }
         let lock = lock_file(repo, &old)?;

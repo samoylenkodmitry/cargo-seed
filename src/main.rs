@@ -4,6 +4,7 @@ mod fingerprint;
 mod git;
 mod mtimes;
 mod prune;
+mod real_path;
 mod seed;
 mod target_dir;
 mod tree_copy;

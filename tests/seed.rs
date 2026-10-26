@@ -16,6 +16,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
+/// The resolved path in the form git takes: Windows canonicalizes to `\\?\C:\...`.
+fn plain_path(path: &Path) -> PathBuf {
+    let resolved = fs::canonicalize(path).unwrap();
+    match resolved
+        .to_str()
+        .and_then(|text| text.strip_prefix(r"\\?\"))
+    {
+        Some(plain) => PathBuf::from(plain),
+        None => resolved,
+    }
+}
+
 struct Fixture {
     root: PathBuf,
 }
@@ -92,7 +104,7 @@ impl Fixture {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let fixture = Fixture {
-            root: fs::canonicalize(&root).unwrap(),
+            root: plain_path(&root),
         };
         let seed = fixture.seed();
         write(
@@ -431,10 +443,22 @@ fn install_hook_leaves_a_hooks_path_folder_alone() {
     );
 }
 
-/// Gives `path` a modification time `minutes` in the past.
+/// Gives `path`, a file or a directory, a modification time `minutes` in the past.
 fn age(path: &Path, minutes: u64) {
     let then = std::time::SystemTime::now() - std::time::Duration::from_secs(minutes * 60);
-    fs::File::open(path).unwrap().set_modified(then).unwrap();
+    #[cfg(windows)]
+    let file = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        fs::File::options()
+            .write(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .unwrap()
+    };
+    #[cfg(not(windows))]
+    let file = fs::File::open(path).unwrap();
+    file.set_modified(then).unwrap();
 }
 
 #[test]
