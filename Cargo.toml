@@ -1,0 +1,16 @@
+[package]
+name = "cargo-seed"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Start every new git worktree with a warm cargo target: a copy-on-write clone of a seed worktree's target, made correct for the new tree"
+license = "MIT OR Apache-2.0"
+keywords = ["cargo", "worktree", "build", "cache", "subcommand"]
+categories = ["development-tools::cargo-plugins"]
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = true
+codegen-units = 1
