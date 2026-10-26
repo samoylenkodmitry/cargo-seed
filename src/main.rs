@@ -1,5 +1,6 @@
 //! `cargo seed`: start every new git worktree with a warm cargo target.
 
+mod dedupe;
 mod fingerprint;
 mod git;
 mod mtimes;
@@ -36,6 +37,9 @@ usage:
       minutes (default 60) and the builds a newer build of the same unit
       replaced. Seeds and targets with a build in flight are left alone.
       Without --apply, reports.
+  cargo seed dedupe --root DIR [--apply]
+      Make byte-identical build files across the cargo targets under DIR
+      share disk blocks (APFS, btrfs, XFS). Without --apply, reports.
 
 git config:
   seed.warm         a warm command; repeat the key for more
@@ -113,6 +117,10 @@ fn run(args: &[String]) -> Result<(), String> {
             std::time::Duration::from_secs(idle_minutes * 60),
             apply,
         ),
+        "dedupe" => match root {
+            Some(root) => dedupe::dedupe(&root, apply),
+            None => return Err("dedupe needs --root DIR".to_owned()),
+        },
         "-h" | "--help" | "help" => {
             print!("{USAGE}");
             Ok(())

@@ -13,14 +13,16 @@ use std::time::SystemTime;
 /// btrfs and XFS, block cloning on ReFS) and copies bytes where it cannot.
 pub(crate) fn copy_tree(src: &Path, dst: &Path) -> io::Result<()> {
     #[cfg(target_vendor = "apple")]
-    if clone_tree_apple(src, dst).is_ok() {
+    if clone_file_apple(src, dst).is_ok() {
         return Ok(());
     }
     copy_entries(src, dst)
 }
 
+/// One `clonefile(2)` call: a file, or a whole directory tree, that shares
+/// `src`'s blocks.
 #[cfg(target_vendor = "apple")]
-fn clone_tree_apple(src: &Path, dst: &Path) -> io::Result<()> {
+pub(crate) fn clone_file_apple(src: &Path, dst: &Path) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     unsafe extern "C" {

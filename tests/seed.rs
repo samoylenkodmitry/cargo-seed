@@ -562,3 +562,83 @@ fn prune_removes_builds_a_newer_build_replaced_and_keeps_the_target_fresh() {
     );
     assert_eq!(fixture.run(&seed), fixture.expected(&seed, "1 2 data-1"));
 }
+
+#[test]
+fn dedupe_shares_only_identical_files_and_keeps_their_content_and_times() {
+    let root =
+        plain_path(&std::env::temp_dir()).join(format!("cargo-seed-dedupe-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let same: Vec<u8> = (0..200_000u32).map(|n| (n % 251) as u8).collect();
+    let mut other = same.clone();
+    other[100_000] ^= 1;
+    for (repo, odd) in [("one", &same), ("two", &other)] {
+        let target = root.join(repo).join("target");
+        write(
+            &target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        );
+        fs::create_dir_all(target.join("debug/.fingerprint")).unwrap();
+        fs::create_dir_all(target.join("debug/deps")).unwrap();
+        fs::write(
+            target.join("debug/deps/libsame-0123456789abcdef.rlib"),
+            &same,
+        )
+        .unwrap();
+        fs::write(target.join("debug/deps/libodd-0123456789abcdef.rlib"), odd).unwrap();
+        for path in [
+            "debug/deps/libsame-0123456789abcdef.rlib",
+            "debug/deps/libodd-0123456789abcdef.rlib",
+            "debug/.fingerprint",
+        ] {
+            age(&target.join(path), 120);
+        }
+    }
+    let modified = |repo: &str, name: &str| {
+        fs::metadata(root.join(repo).join("target/debug/deps").join(name))
+            .unwrap()
+            .modified()
+            .unwrap()
+    };
+    let before = modified("two", "libsame-0123456789abcdef.rlib");
+    let tool = |args: &[&str]| {
+        let mut tool = command(env!("CARGO_BIN_EXE_cargo-seed"), &root);
+        tool.args(args);
+        ok(tool)
+    };
+    let report = tool(&["seed", "dedupe", "--root", root.to_str().unwrap()]);
+    assert!(report.contains("in 1 files"), "{report}");
+    tool(&[
+        "seed",
+        "dedupe",
+        "--root",
+        root.to_str().unwrap(),
+        "--apply",
+    ]);
+    for repo in ["one", "two"] {
+        assert_eq!(
+            fs::read(
+                root.join(repo)
+                    .join("target/debug/deps/libsame-0123456789abcdef.rlib")
+            )
+            .unwrap(),
+            same
+        );
+    }
+    assert_eq!(
+        fs::read(root.join("two/target/debug/deps/libodd-0123456789abcdef.rlib")).unwrap(),
+        other
+    );
+    assert_eq!(
+        modified("two", "libsame-0123456789abcdef.rlib"),
+        before,
+        "the copy's time changed"
+    );
+    if cfg!(target_vendor = "apple") {
+        let again = tool(&["seed", "dedupe", "--root", root.to_str().unwrap()]);
+        assert!(
+            again.contains("in 0 files"),
+            "an APFS clone was not recognised as shared: {again}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
