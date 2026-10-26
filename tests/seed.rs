@@ -700,3 +700,30 @@ fn refresh_rebuilds_a_seed_whose_warm_up_failed_and_waits_for_disk() {
         "a refresh started without the disk it needs"
     );
 }
+
+#[test]
+fn refresh_rebuilds_a_seed_whose_target_was_removed() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let origin = fixture.root.join("origin.git");
+    fixture.git(
+        &fixture.root,
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    fixture.git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    fixture.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    fixture.git(&seed, &["config", "seed.ref", "origin/main"]);
+    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
+    let first = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
+    fs::remove_dir_all(first.join("target")).unwrap();
+    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
+    let second = PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
+    assert!(
+        second.join("target").is_dir(),
+        "the seed stayed without a target"
+    );
+    assert_eq!(fixture.compiled(&second), Vec::<String>::new());
+}

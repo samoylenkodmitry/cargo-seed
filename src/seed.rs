@@ -124,6 +124,9 @@ pub(crate) fn clone(tree: &Path, seed: Option<&Path>, from_hook: bool) -> io::Re
                 seed.display(),
                 tree.display()
             );
+            if from_hook {
+                start_background(&tree_git, "refresh", &[])?;
+            }
             return Ok(());
         }
         seed_tree(&seed, &tree)?;
@@ -236,9 +239,11 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
     let commit = repo.text(["rev-parse", "--verify", &followed])?;
     let current = configured_seed(&repo);
     let failed_marker = state.join("warm-failed");
+    // A seed is whole when its warm-up passed and its target is still there.
     let current_is_whole = current.as_deref().is_some_and(|current| {
-        fs::read_to_string(&failed_marker)
-            .map_or(true, |failed| Path::new(failed.trim()) != current)
+        current.join("target").is_dir()
+            && fs::read_to_string(&failed_marker)
+                .map_or(true, |failed| Path::new(failed.trim()) != current)
     });
     if let Some(current) = current
         .as_deref()
@@ -488,7 +493,10 @@ pub(crate) fn install_hook(repo: &Path) -> io::Result<()> {
 
 /// Bytes free for this user on the filesystem holding `path`.
 #[cfg(unix)]
-#[allow(clippy::useless_conversion, reason = "statvfs field widths differ between platforms")]
+#[allow(
+    clippy::useless_conversion,
+    reason = "statvfs field widths differ between platforms"
+)]
 fn free_bytes(path: &Path) -> Option<u64> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
