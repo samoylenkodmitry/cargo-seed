@@ -642,3 +642,61 @@ fn dedupe_shares_only_identical_files_and_keeps_their_content_and_times() {
     }
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn refresh_rebuilds_a_seed_whose_warm_up_failed_and_waits_for_disk() {
+    let fixture = Fixture::new();
+    let seed = fixture.seed();
+    let origin = fixture.root.join("origin.git");
+    fixture.git(
+        &fixture.root,
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    fixture.git(
+        &seed,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    fixture.git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    fixture.git(&seed, &["config", "seed.ref", "origin/main"]);
+    let current = || PathBuf::from(fixture.git(&seed, &["config", "--get", "seed.path"]));
+
+    fixture.cargo_seed(
+        &seed,
+        &[
+            "seed",
+            "refresh",
+            "--warm",
+            "cargo build -p app",
+            "--warm",
+            "cargo build -p no-such-package",
+        ],
+    );
+    let failed = current();
+    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
+    let rebuilt = current();
+    assert_ne!(rebuilt, failed, "a seed whose warm-up failed stayed");
+    assert!(!failed.exists(), "the failed seed was not retired");
+    fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
+    assert_eq!(
+        current(),
+        rebuilt,
+        "a whole seed at the same commit was rebuilt"
+    );
+
+    fixture.git(&seed, &["config", "seed.minFreeGb", "999999999"]);
+    let next = fixture.worktree("next", "origin/main");
+    fixture.git(&next, &["switch", "-q", "-c", "next"]);
+    write(
+        &next.join("base/src/lib.rs"),
+        "pub fn value() -> u32 { 9 }\n",
+    );
+    fixture.git(&next, &["commit", "-qam", "next"]);
+    fixture.git(&next, &["push", "-q", "origin", "HEAD:main"]);
+    let report = fixture.cargo_seed(&seed, &["seed", "refresh", "--warm", "cargo build -p app"]);
+    assert!(report.contains("no refresh"), "{report}");
+    assert_eq!(
+        current(),
+        rebuilt,
+        "a refresh started without the disk it needs"
+    );
+}

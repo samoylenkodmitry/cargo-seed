@@ -19,6 +19,9 @@ const REF_KEY: &str = "seed.ref";
 const AUTO_REFRESH_KEY: &str = "seed.autoRefresh";
 /// The reason a seed worktree is locked with, which marks it as one.
 pub(crate) const LOCK_REASON: &str = "cargo seed";
+/// Git config key of the free space a refresh needs before it starts.
+const MIN_FREE_KEY: &str = "seed.minFreeGb";
+const DEFAULT_MIN_FREE_GB: u64 = 40;
 /// How often new worktrees start a prune of the repository's worktrees.
 const PRUNE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// The tag cargo writes into a target it creates (https://bford.info/cachedir/).
@@ -232,11 +235,20 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
     }
     let commit = repo.text(["rev-parse", "--verify", &followed])?;
     let current = configured_seed(&repo);
-    if let Some(current) = current.as_deref().filter(|current| {
-        Checkout::new(current)
-            .head()
-            .is_ok_and(|head| head == commit)
-    }) {
+    let failed_marker = state.join("warm-failed");
+    let current_is_whole = current.as_deref().is_some_and(|current| {
+        fs::read_to_string(&failed_marker)
+            .map_or(true, |failed| Path::new(failed.trim()) != current)
+    });
+    if let Some(current) = current
+        .as_deref()
+        .filter(|current| {
+            Checkout::new(current)
+                .head()
+                .is_ok_and(|head| head == commit)
+        })
+        .filter(|_| current_is_whole)
+    {
         println!("cargo-seed: {} is at {followed} already", current.display());
         return retire_old_seeds(&repo, current);
     }
@@ -245,12 +257,35 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
-    let name = format!(
+    let parent = primary.parent().unwrap_or(&primary).to_path_buf();
+    let min_free_gb: u64 = repo
+        .config(MIN_FREE_KEY)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(DEFAULT_MIN_FREE_GB);
+    if let Some(free) = free_bytes(&parent)
+        && free < min_free_gb * 1_000_000_000
+    {
+        println!(
+            "cargo-seed: {:.0} GB free, under {}'s {min_free_gb} GB; no refresh",
+            free as f64 / 1e9,
+            MIN_FREE_KEY
+        );
+        return Ok(());
+    }
+    let mut name = format!(
         "{}-seed-{}",
         primary.file_name().unwrap_or_default().to_string_lossy(),
         &commit[..10]
     );
-    let seed = primary.parent().unwrap_or(&primary).join(name);
+    // A seed at this commit whose warm-up failed is rebuilt beside it, so
+    // clones keep reading the whole tree they found.
+    if current.as_deref() == Some(parent.join(&name).as_path()) {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        name = format!("{name}-{}", now.as_secs());
+    }
+    let seed = parent.join(name);
     if !seed_worktrees(&repo)?.contains(&seed) {
         // Hooks stay off: this seeds the worktree itself, and the hook would
         // start another refresh.
@@ -289,6 +324,7 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
     };
     let log = File::create(state.join("warm.log"))?;
     let warm_started = SystemTime::now();
+    let mut failed = false;
     for command in commands {
         let started = Instant::now();
         let status = shell(&command)
@@ -296,6 +332,7 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
             .stdout(log.try_clone()?)
             .stderr(log.try_clone()?)
             .status()?;
+        failed |= !status.success();
         let result = if status.success() {
             "ok".to_owned()
         } else {
@@ -313,6 +350,12 @@ pub(crate) fn refresh(repo: &Path, warm: &[String]) -> io::Result<()> {
         warm_started.elapsed().unwrap_or_default(),
         true,
     )?;
+    // A failed warm-up still beats no seed; the next refresh rebuilds it.
+    if failed {
+        fs::write(&failed_marker, seed.to_string_lossy().as_bytes())?;
+    } else if failed_marker.exists() {
+        fs::remove_file(&failed_marker)?;
+    }
     repo.run(["config", PATH_KEY, &seed.to_string_lossy()])?;
     println!(
         "cargo-seed: new worktrees now start from {}",
@@ -441,4 +484,23 @@ pub(crate) fn install_hook(repo: &Path) -> io::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Bytes free for this user on the filesystem holding `path`.
+#[cfg(unix)]
+#[allow(clippy::useless_conversion, reason = "statvfs field widths differ between platforms")]
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `stat` is plain data that statvfs fills in.
+    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: a NUL-terminated path and a statvfs that outlive the call.
+    (unsafe { libc::statvfs(path.as_ptr(), &mut stat) } == 0)
+        .then(|| u64::from(stat.f_bavail) * u64::from(stat.f_frsize))
+}
+
+#[cfg(not(unix))]
+fn free_bytes(_path: &Path) -> Option<u64> {
+    None
 }
